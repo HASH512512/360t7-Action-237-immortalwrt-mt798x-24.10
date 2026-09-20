@@ -72,8 +72,16 @@ jobs:
 
           jq -Rs '{body: .}' newbody.md > payload.json
 
-          curl -s -X PATCH \
+          # 必须显式声明 Content-Type，否则 GitHub 把 body 当表单编码丢掉
+          CODE=$(curl -s -o resp.txt -w '%{http_code}' -X PATCH \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
             "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
-            -d @payload.json -o /dev/null -w "release body PATCH HTTP:%{http_code}\n"
+            -d @payload.json)
+
+          echo "release body PATCH HTTP:$CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Release 正文回写失败 HTTP:$CODE $(head -c 300 resp.txt)"
+            exit 1
+          fi
