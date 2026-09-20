@@ -15,6 +15,23 @@ name: Build immortalwrt24.10-6.6 360T7 Latest Passwall+Sing-box
 on:
   repository_dispatch:
   workflow_dispatch:
+    inputs:
+      build_ua3f:
+        description: "是否编译 UA3F 插件 (true/false)"
+        required: false
+        default: "true"
+      ua3f_ref:
+        description: "UA3F 分支/tag/commit，留空或 master 取最新"
+        required: false
+        default: "master"
+      extra_repos:
+        description: '临时追加插件源码，格式 "URL|REF|目标目录"，多条用 ; 分隔'
+        required: false
+        default: ""
+      extra_packages:
+        description: "临时追加启用的包，空格或逗号分隔，如 luci-theme-argon luci-app-ttyd"
+        required: false
+        default: ""
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
@@ -23,7 +40,13 @@ env:
   CONFIG_FILE: 2410-6.6-360t7-passwall-sing-box.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: 2410-6.6-diy-part2-6-1-pw.sh
-  RELEASE_FILE: 2410-6.6-pw-release.txt  
+  CUSTOM_PKG_SH: diy-part2-custom.sh
+  # ---- 自定义插件（清单文件 + dispatch 输入）----
+  ENABLE_UA3F: ${{ github.event.inputs.build_ua3f || 'true' }}
+  UA3F_REF: ${{ github.event.inputs.ua3f_ref || 'master' }}
+  EXTRA_REPOS: ${{ github.event.inputs.extra_repos }}
+  EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages }}
+  RELEASE_FILE: 2410-6.6-pw-release.txt
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
@@ -95,11 +118,31 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    # === 自定义插件：把 CONFIG_PACKAGE_xxx=y 注入 openwrt/.config ===
+    - name: Enable custom packages
+      run: |
+        chmod +x $CUSTOM_PKG_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$CUSTOM_PKG_SH
+
+    # === UA3F 的 Build/Prepare 直接调用裸命令 po2lmo 生成中文语言包，
+    #     而 po2lmo 由 luci-base 的 host build 提供；luci.mk 只给 luci 系包
+    #     自动加 luci-base/host 依赖，第三方包没有，并行编译会撞 po2lmo: not found ===
+    - name: Prebuild po2lmo (for UA3F i18n)
+      run: |
+        cd openwrt
+        make package/feeds/luci/luci-base/host/compile -j$(nproc)
+        test -x staging_dir/host/bin/po2lmo && echo "po2lmo OK" || { echo "::error::po2lmo 未生成"; exit 1; }
+
     - name: Download package
       id: package
       run: |
         cd openwrt
         make defconfig
+        # defconfig 对依赖不满足的符号是「静默丢弃」，必须硬校验，否则会产出没有 UA3F 的固件
+        if [ "${ENABLE_UA3F}" = "true" ]; then
+          grep -q '^CONFIG_PACKAGE_ua3f=y' .config || { echo "::error::UA3F 未进入 .config，请检查 luci-compat / iptables / ipset 依赖"; exit 1; }
+        fi
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -114,6 +157,14 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        # UA3F 产物核对
+        if [ "${ENABLE_UA3F}" = "true" ]; then
+          echo "---- ua3f 相关 ipk ----"
+          find bin/packages -name 'ua3f*.ipk' -exec ls -lh {} \; 2>/dev/null || true
+          find bin/packages -name 'ua3f*.ipk' | grep -q . || { echo "::error::没找到 ua3f ipk，编译可能失败"; exit 1; }
+          UA3F_VER=$(sed -n 's/^PKG_VERSION:=//p' package/UA3F/openwrt/Makefile | head -1)
+          echo "UA3F_VER=${UA3F_VER}" >> $GITHUB_ENV
+        fi
 
 
     - name: Check space usage
@@ -149,6 +200,10 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch "${RELEASE_FILE}"
+
+        if [ "${ENABLE_UA3F}" = "true" ]; then
+          printf '\n内置插件：UA3F %s（LuCI 路径：服务 → UA3F；默认监听 1080，服务模式 SOCKS5/HTTP/TPROXY/REDIRECT/NFQUEUE）\n' "${UA3F_VER:-unknown}" >> "${RELEASE_FILE}"
+        fi
 
         if [ "${UPLOAD_GOFILE}" = "true" ] && [ -n "${{ steps.gofile.outputs.url }}" ]; then
           echo "{U+0001F517} [GoFile](${{ steps.gofile.outputs.url }})" >> "${RELEASE_FILE}"

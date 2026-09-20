@@ -1,0 +1,9 @@
+# 额外插件源码仓库（在 diy-part1.sh 中 git clone 到 openwrt/ 下）
+# 格式： <仓库地址>|<分支/tag/commit>|<目标目录>|<备注>
+#   第2段留空 = 用默认分支；第3段相对 openwrt/ 目录。
+#
+# UA3F 已内置在 diy-part1.sh 里（受 workflow input build_ua3f / ua3f_ref 控制），
+# 不需要在这里重复写。这里放其它自定义插件，例如：
+#
+# https://github.com/kenzok8/luci-app-ua3f.git|main|package/luci-app-ua3f|UA3F 独立 LuCI（一般不需要）
+# https://github.com/immortalwrt/luci-app-homeproxy.git|master|package/luci-app-homeproxy|homeproxy

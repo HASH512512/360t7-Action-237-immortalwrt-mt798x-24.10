@@ -1,0 +1,9 @@
+# 工作区/工具临时目录
+.workbuddy/
+
+# OpenWrt 构建残留（本仓库只做 workflow 分发，不本地编译）
+openwrt/
+staging_dir/
+tmp/
+/bin/
+*.ipk

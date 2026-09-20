@@ -1,0 +1,21 @@
+# 自定义编入固件的软件包清单（diy-part2-custom.sh 读取，写入 openwrt/.config）
+#
+# 写法 A（完整符号）：  CONFIG_PACKAGE_luci-app-foo=y
+# 写法 B（简写）：      luci-app-foo
+# 以 # 开头为注释；包名必须能在「源码树 / feeds / custom-repos」里被找到，
+# 否则 make defconfig 会静默丢弃该符号（脚本会打 WARN）。
+#
+# UA3F 已内置启用（含 iptables/ipset/nft 系列依赖），此处无需重复写。
+
+# ---- 下面按需取消注释 ----
+# luci-theme-argon
+# luci-app-argon-config
+# luci-i18n-argon-config-zh-cn
+# luci-app-diskman
+# luci-app-ttyd
+# luci-app-sqm
+# kmod-usb-storage
+# block-mount
+# luci-app-filebrowser
+# luci-app-openclash
+# luci-app-homeproxy

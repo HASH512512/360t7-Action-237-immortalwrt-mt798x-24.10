@@ -1,0 +1,8 @@
+# 额外 feed 源（在 diy-part1.sh 中追加到 feeds.conf.default，之后会被 feeds update/install 处理）
+# 格式： src-git <feed名> <仓库地址>[;<分支>]
+# 注意：这里加进来的 feed 里的包，需要经过 feeds install 后才能用 custom-packages.list 启用。
+#
+# 常用示例（按需取消注释）：
+# src-git helloworld https://github.com/fw876/helloworld
+# src-git kenzok8 https://github.com/kenzok8/openwrt-packages
+# src-git small https://github.com/kenzok8/small
