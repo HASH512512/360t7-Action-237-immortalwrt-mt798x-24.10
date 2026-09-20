@@ -103,6 +103,32 @@ Compile the firmware          make -j CC=ccache，失败回退 make -j1   【改
 
 ---
 
+## 3.5 构建结果自证：`verify-release.yml`
+
+`Actions → Verify Release Manifest`，输入 `tag`（如 `2026.09.20-1948`）和 `pattern`（默认 `ua3f`）。
+
+它做三件事：下载该 Release 的 `.manifest` → grep 目标包 → **把命中行回写进该 Release 的正文**。
+之所以回写正文而不是只打日志，是因为 Actions 日志在这种受限网络下取不到，正文可以用 API 直接读。
+
+```bash
+# 读取一次校验结果
+curl -s "https://api.github.com/repos/<owner>/<repo>/releases/tags/<tag>" | jq -r .body
+```
+
+已验证输出（Release `2026.09.20-1948`）：
+
+```text
+### manifest 校验 · 检索 `ua3f`
+
+ua3f - 3.6.0-r1
+包总数：388
+```
+
+`ua3f - 3.6.0-r1` 直接来自固件 rootfs 的包清单 —— 这是 UA3F 进了固件的硬证据，
+比看编译日志可靠得多。
+
+---
+
 ## 4. 构建日志里应该看到
 
 ```
