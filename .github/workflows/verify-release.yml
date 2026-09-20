@@ -1,0 +1,78 @@
+name: Verify Release Manifest
+
+# 用途：校验某个 Release 的固件 rootfs 包清单（.manifest）里确实含有指定包。
+# 因为 Actions 日志在本机环境不可读，校验结果会回写到该 Release 的正文里，便于外部读取。
+#
+# 用法：Actions → Verify Release Manifest → Run workflow
+#        tag     = 2026.09.20-1948
+#        pattern = ua3f
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要校验的 Release tag，例如 2026.09.20-1948"
+        required: true
+      pattern:
+        description: "要检索的包名正则，默认 ua3f"
+        required: false
+        default: "ua3f"
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download release manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -e
+          MANIFEST=$(gh release view "$TAG" --json assets --jq '.assets[].name' | grep '\.manifest$' | head -1)
+          test -n "$MANIFEST" || { echo "::error::$TAG 里没有 .manifest 资产"; exit 1; }
+          echo "manifest = $MANIFEST"
+          gh release download "$TAG" -p "$MANIFEST" -O manifest.txt --clobber
+          echo "包总数 = $(wc -l < manifest.txt)"
+
+      - name: Grep pattern and report into release body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+          PAT: ${{ github.event.inputs.pattern }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          grep -iE "$PAT" manifest.txt > hits.txt || true
+
+          if [ -s hits.txt ]; then
+            echo "命中 $(wc -l < hits.txt) 行"
+            cat hits.txt
+            echo "::notice::manifest 命中 $PAT：$(wc -l < hits.txt) 行"
+          else
+            echo "NO MATCH: $PAT" > hits.txt
+            echo "::warning::manifest 未命中 $PAT"
+          fi
+
+          printf '包总数：%s\n' "$(wc -l < manifest.txt)" >> hits.txt
+
+          BODY=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" | jq -r '.body')
+
+          {
+            printf '%s\n\n' "$BODY"
+            printf '### manifest 校验 · 检索 `%s`\n\n```\n' "$PAT"
+            cat hits.txt
+            printf '```\n'
+          } > newbody.md
+
+          jq -Rs '{body: .}' newbody.md > payload.json
+
+          curl -s -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+            -d @payload.json -o /dev/null -w "release body PATCH HTTP:%{http_code}\n"
