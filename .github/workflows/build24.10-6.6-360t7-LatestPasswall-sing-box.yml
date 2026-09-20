@@ -1,16 +1,20 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
 #
-# File: .github/workflows/openwrt-bulder.yml
-# Description: Build OpenWrt using GitHub Actions
+# File: .github/workflows/build24.10-6.6-360t7-LatestPasswall-sing-box.yml
+# Description: Build immortalwrt24.10-6.6 360T7 Passwall+Sing-box (+ UA3F)
 #
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
+# 结构对齐已验证仓库 HASH512512/immortalwrt-mt7981-cudy-tr3000 的 openwrt-builder.yml：
+#   - 纯 make 流程，不手工干预 toolchain / 不手工预构建 host 工具
+#   - jlumbroso/free-disk-space 释放磁盘
+#   - ccache + dl 缓存（actions/cache）
+#   - make -j$(nproc) CC="ccache gcc" CXX="ccache g++"，失败回退 make -j1 V=s
 #
 
 name: Build immortalwrt24.10-6.6 360T7 Latest Passwall+Sing-box
+
+permissions:
+  contents: write
 
 on:
   repository_dispatch:
@@ -34,6 +38,8 @@ on:
         default: ""
 
 env:
+  CCACHE_DIR: /workdir/.ccache
+  CCACHE_MAXSIZE: 2G
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
   FEEDS_CONF: feeds.conf.default
@@ -41,7 +47,6 @@ env:
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: 2410-6.6-diy-part2-6-1-pw.sh
   CUSTOM_PKG_SH: diy-part2-custom.sh
-  # ---- 自定义插件（清单文件 + dispatch 输入）----
   ENABLE_UA3F: ${{ github.event.inputs.build_ua3f || 'true' }}
   UA3F_REF: ${{ github.event.inputs.ua3f_ref || 'master' }}
   EXTRA_REPOS: ${{ github.event.inputs.extra_repos }}
@@ -57,190 +62,187 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Initialization environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
-    - name: Clone source code
-      working-directory: /workdir
-      run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
 
-    - name: Load custom feeds
-      run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          df -hT $PWD
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Update feeds
-      run: |
-         cd openwrt
-         ./scripts/feeds update -a
-         rm -rf feeds/packages/lang/golang
-         git clone https://github.com/kenzok8/golang -b 1.25 feeds/packages/lang/golang
+      - name: Setup ccache & DL cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/.ccache
+            /workdir/openwrt/dl
+          key: ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-${{ hashFiles('2410-6.6-360t7-passwall-sing-box.config', 'custom-packages.list', 'diy-part1.sh', 'diy-part2-custom.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-
 
+      - name: Configure ccache
+        run: |
+          ccache --set-config=max_size=$CCACHE_MAXSIZE
+          ccache --set-config=cache_dir=$CCACHE_DIR
+          ccache --set-config=compression=true
+          ccache -z
 
-    - name: Install feeds
-      run: |
-        cd openwrt
-        ./scripts/feeds install -a 
-        
-        # 移除 openwrt feeds 自带的核心库
-        rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-        git clone https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
+      - name: Load custom feeds
+        run: |
+          [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+          chmod +x $DIY_P1_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P1_SH
 
-        # 移除 openwrt feeds 过时的luci版本
-        rm -rf feeds/luci/applications/luci-app-passwall
-        git clone https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
-        
-         
-    - name: Load custom configuration
-      run: |
-        # [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+      - name: Update feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          # UA3F 要求 go >= 1.23
+          rm -rf feeds/packages/lang/golang
+          git clone https://github.com/kenzok8/golang -b 1.25 feeds/packages/lang/golang
 
-    # === 自定义插件：把 CONFIG_PACKAGE_xxx=y 注入 openwrt/.config ===
-    - name: Enable custom packages
-      run: |
-        chmod +x $CUSTOM_PKG_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$CUSTOM_PKG_SH
+      - name: Install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds install -a
 
-    - name: Download package
-      id: package
-      run: |
-        cd openwrt
-        make defconfig
-        # defconfig 对依赖不满足的符号是「静默丢弃」，必须硬校验，否则会产出没有 UA3F 的固件
-        if [ "${ENABLE_UA3F}" = "true" ]; then
-          grep -q '^CONFIG_PACKAGE_ua3f=y' .config || { echo "::error::UA3F 未进入 .config，请检查 luci-compat / iptables / ipset 依赖"; exit 1; }
-        fi
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+          # 移除 openwrt feeds 自带的核心库
+          rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+          git clone https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
 
-    # === 先落好 host 工具链，否则下面调 package 的 host 构建目标会直接失败 ===
-    # 这两步本来就是 make world 的前置工作，提前做不会增加总时长。
-    - name: Prepare tools & toolchain
-      run: |
-        cd openwrt
-        make tools/install -j$(nproc)
-        make toolchain/install -j$(nproc)
+          # 移除 openwrt feeds 过时的 luci 版本
+          rm -rf feeds/luci/applications/luci-app-passwall
+          git clone https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
 
-    # === UA3F 的 Build/Prepare 直接调用裸命令 po2lmo 生成中文语言包，
-    #     而 po2lmo 由 luci-base 的 host build 提供；luci.mk 只给 luci 系包
-    #     自动加 luci-base/host 依赖，第三方包没有（已在 diy-part2-custom.sh 里补上）。
-    #     这里显式预构建一次，保证 po2lmo 一定先于 UA3F 存在。 ===
-    - name: Prebuild po2lmo (for UA3F i18n)
-      run: |
-        cd openwrt
-        make package/feeds/luci/luci-base/host/compile -j$(nproc)
-        test -x staging_dir/host/bin/po2lmo && echo "po2lmo OK" || { echo "::error::po2lmo 未生成"; exit 1; }
+      - name: Load custom configuration
+        run: |
+          [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+          chmod +x $DIY_P2_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: Compile the firmware
-      id: compile
-      run: |
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        # UA3F 产物核对
-        if [ "${ENABLE_UA3F}" = "true" ]; then
-          echo "---- ua3f 相关 ipk ----"
-          find bin/packages -name 'ua3f*.ipk' -exec ls -lh {} \; 2>/dev/null || true
-          find bin/packages -name 'ua3f*.ipk' | grep -q . || { echo "::error::没找到 ua3f ipk，编译可能失败"; exit 1; }
-          UA3F_VER=$(sed -n 's/^PKG_VERSION:=//p' package/UA3F/openwrt/Makefile | head -1)
-          echo "UA3F_VER=${UA3F_VER}" >> $GITHUB_ENV
-        fi
+      - name: Enable custom packages
+        run: |
+          chmod +x $CUSTOM_PKG_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$CUSTOM_PKG_SH
 
+      - name: Download package
+        id: package
+        run: |
+          cd openwrt
+          make defconfig
+          if [ "${ENABLE_UA3F}" = "true" ]; then
+            grep -q '^CONFIG_PACKAGE_ua3f=y' .config || { echo "::error::UA3F 未进入 .config，请检查 luci-compat / iptables / ipset 依赖"; exit 1; }
+          fi
+          make download -j$(nproc)
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
 
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
+      - name: Compile the firmware
+        id: compile
+        run: |
+          cd openwrt
+          echo -e "$(nproc) thread compile"
+          if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
+            echo "多线程编译失败，回退单线程重试..."
+            make -j1 V=s || make -j1 V=s
+          fi
+          echo "status=success" >> $GITHUB_OUTPUT
+          if [ "${ENABLE_UA3F}" = "true" ]; then
+            echo "---- ua3f 相关 ipk ----"
+            find bin/packages -name 'ua3f*.ipk' -exec ls -lh {} \; 2>/dev/null || true
+            UA3F_VER=$(sed -n 's/^PKG_VERSION:=//p' package/UA3F/openwrt/Makefile | head -1)
+            echo "UA3F_VER=${UA3F_VER}" >> $GITHUB_ENV
+          fi
+          ccache -s || true
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
+      - name: Check space usage
+        if: (!cancelled())
+        run: df -hT
 
-    - name: Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+      - name: Upload bin directory
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+        with:
+          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: openwrt/bin
 
-    - name: Upload firmware directory
-      uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+      - name: Organize files
+        id: organize
+        if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+        run: |
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
+          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch "${RELEASE_FILE}"
+      - name: Upload firmware directory
+        uses: actions/upload-artifact@v4
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        with:
+          name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: ${{ env.FIRMWARE }}
 
-        if [ "${ENABLE_UA3F}" = "true" ]; then
-          printf '\n内置插件：UA3F %s（LuCI 路径：服务 → UA3F；默认监听 1080，服务模式 SOCKS5/HTTP/TPROXY/REDIRECT/NFQUEUE）\n' "${UA3F_VER:-unknown}" >> "${RELEASE_FILE}"
-        fi
+      - name: Generate release tag
+        id: tag
+        if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+        run: |
+          echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          touch "${RELEASE_FILE}"
+          if [ "${ENABLE_UA3F}" = "true" ]; then
+            printf '\n内置插件：UA3F %s（LuCI 路径：服务 → UA3F；默认监听 1080，服务模式 SOCKS5/HTTP/TPROXY/REDIRECT/NFQUEUE）\n' "${UA3F_VER:-unknown}" >> "${RELEASE_FILE}"
+          fi
+          echo "status=success" >> $GITHUB_OUTPUT
 
-        if [ "${UPLOAD_GOFILE}" = "true" ] && [ -n "${{ steps.gofile.outputs.url }}" ]; then
-          echo "{U+0001F517} [GoFile](${{ steps.gofile.outputs.url }})" >> "${RELEASE_FILE}"
-        fi
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success' && !cancelled()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: ${{ env.RELEASE_FILE }}
+          files: ${{ env.FIRMWARE }}/*
 
-        echo "status=success" >> $GITHUB_OUTPUT
-    
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@v2
-      if: steps.tag.outputs.status == 'success' && !cancelled()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: ${{ env.RELEASE_FILE }}
-        files: ${{ env.FIRMWARE }}/*
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          retain_days: 0
+          keep_minimum_runs: 5
 
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 12
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Remove old Releases
+        uses: dev-drprasad/delete-older-releases@master
+        if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+        with:
+          keep_latest: 12
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

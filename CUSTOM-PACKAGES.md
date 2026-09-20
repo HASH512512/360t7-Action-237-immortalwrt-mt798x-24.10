@@ -56,9 +56,18 @@ UA3F 是「Advanced HTTP Rewriting Proxy」，用于重写 User-Agent（校园�
 
 ---
 
-## 3. 执行链路（相对原模板新增的部分）
+## 3. 执行链路
+
+结构对齐已验证仓库 `HASH512512/immortalwrt-mt7981-cudy-tr3000`（同作者，TR3000 已跑通）：
+**纯 `make` 流程，不手工干预 toolchain，不手工预构建 host 工具。**
 
 ```
+Checkout
+Free Disk Space               jlumbroso/free-disk-space
+Initialization environment
+Clone source code             --single-branch --filter=blob:none
+Setup ccache & DL cache       actions/cache@v4 缓存 .ccache + openwrt/dl
+Configure ccache              2G / compression
 Load custom feeds & sources   -> diy-part1.sh
   ├─ custom-feeds.list        追加 feed 到 feeds.conf.default
   ├─ custom-repos.list        克隆第三方插件到 package/
@@ -70,28 +79,26 @@ Enable custom packages        -> diy-part2-custom.sh               【新增】
   ├─ 注入 CONFIG_PACKAGE_xxx=y 到 openwrt/.config
   └─ 给 UA3F 的 Makefile 补 PKG_BUILD_DEPENDS += luci-base/host
 Download package              make defconfig + UA3F 硬校验          【改】
-Prepare tools & toolchain     make tools/install + toolchain/install 【新增】
-Prebuild po2lmo               预构建 luci-base host 工具            【新增】
-Compile the firmware          make + ua3f ipk 产物核对              【改】
+Compile the firmware          make -j CC=ccache，失败回退 make -j1   【改】
+                              + ua3f ipk 产物核对
 ```
 
-### 三个必须保留的细节
+### 两个必须保留的细节
 
-1. **`Prepare tools & toolchain` + `Prebuild po2lmo` 不能删，顺序也不能动。**
+1. **`diy-part2-custom.sh` 里的 `PKG_BUILD_DEPENDS` 补丁不能删。**
    UA3F 的 `Build/Prepare` 直接调用裸命令 `po2lmo` 生成中文语言包，而 `po2lmo` 由 `luci-base` 的 **host build** 提供。
    `immortalwrt/luci/luci.mk` 里 `PKG_BUILD_DEPENDS += ... luci-base/host` **只对 luci 系包生效**，
-   第三方包没有这个依赖，`make -j$(nproc)` 并行时会出现 `po2lmo: not found`。
+   第三方包没有这个依赖，`make -j$(nproc)` 并行时会撞 `po2lmo: not found`。
+   补上后 `po2lmo` 在 OpenWrt 依赖图里排在 UA3F 之前，加上 `make -j1` 回退，双保险。
 
-   > 踩坑记录：直接在 `Load custom configuration` 之后调 `make package/feeds/luci/luci-base/host/compile`
-   > 会**失败**——此时 `tools` / `toolchain` 还没 `install`，make 直接退出，`po2lmo` 压根没生成。
-   > 所以必须先 `make tools/install` + `make toolchain/install`（这两步本来就是 `make world` 的前置工作，
-   > 提前做**不增加总时长**），而且这两步要放在 `make defconfig` 之后。
+   > 踩坑记录（两次尝试都失败，别再走这条路）：
+   > 在 workflow 里手工预构建 `po2lmo` 走不通。
+   > ① 放在 `Load custom configuration` 之后——`tools` / `toolchain` 还没 install，make 直接 exit 1；
+   > ② 补上 `make tools/install` + `make toolchain/install` 再调 `make package/feeds/luci/luci-base/host/compile`
+   > ——toolchain 那步过了，host 构建目标**依然** exit 1，`po2lmo` 仍未生成。
+   > 结论：交给 `make` 自己的依赖图，别手工插手。
 
-2. **`diy-part2-custom.sh` 里的 `PKG_BUILD_DEPENDS` 补丁是双保险。**
-   它让 `po2lmo` 在 OpenWrt 自己的依赖图里排在 UA3F 之前，
-   即使预构建那步出问题，`make` 的依赖顺序和原有的 `make -j8 || make -j1` 重试也能兜住。
-
-3. **`grep -q '^CONFIG_PACKAGE_ua3f=y' .config` 硬校验不能删。**
+2. **`grep -q '^CONFIG_PACKAGE_ua3f=y' .config` 硬校验不能删。**
    `make defconfig` 对依赖不满足的符号是**静默丢弃**的，没有这道闸门就会产出一个「构建成功但没有 UA3F」的固件。
 
 ---
@@ -104,9 +111,9 @@ Compile the firmware          make + ua3f ipk 产物核对              【改�
 [diy-part2-custom] 启用(替换 not set): CONFIG_PACKAGE_ua3f
 [diy-part2-custom] 已给 UA3F 补 PKG_BUILD_DEPENDS += luci-base/host
   [OK]   CONFIG_PACKAGE_ua3f=y
-po2lmo OK
 ---- ua3f 相关 ipk ----
 -rw-r--r--  ...  ua3f_3.6.0-1_aarch64_cortex-a53.ipk
+Cache hit rate ...   （ccache 生效后二次构建明显加快）
 ```
 
 ---
