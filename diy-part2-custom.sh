@@ -60,6 +60,23 @@ if [ "${ENABLE_UA3F:-false}" = "true" ]; then
 		CONFIG_PACKAGE_kmod-nft-socket; do
 		enable_sym "$s"
 	done
+
+	# UA3F 的 Build/Prepare 调用裸命令 po2lmo，而 po2lmo 由 luci-base 的 host build 提供。
+	# luci.mk 会给 luci 系包自动加 luci-base/host 依赖，UA3F 是第三方包没有，必须自己补，
+	# 否则 make -j 并行时 UA3F 可能先于 po2lmo 构建 -> "po2lmo: not found"。
+	UA3F_MK="package/UA3F/openwrt/Makefile"
+	if [ -f "$UA3F_MK" ]; then
+		if grep -q '^PKG_BUILD_DEPENDS:=golang/host$' "$UA3F_MK"; then
+			sed -i 's|^PKG_BUILD_DEPENDS:=golang/host$|PKG_BUILD_DEPENDS:=golang/host luci-base/host|' "$UA3F_MK"
+			log "已给 UA3F 补 PKG_BUILD_DEPENDS += luci-base/host"
+		elif grep -q 'luci-base/host' "$UA3F_MK"; then
+			log "UA3F 已有 luci-base/host 构建依赖"
+		else
+			warn "未匹配到 UA3F 的 PKG_BUILD_DEPENDS 行，po2lmo 依赖需靠 workflow 里的预构建步骤保证"
+		fi
+	else
+		warn "$UA3F_MK 不存在，跳过 UA3F 构建依赖补丁"
+	fi
 fi
 
 # ---------------------------------------------------------------- #

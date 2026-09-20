@@ -125,15 +125,6 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$CUSTOM_PKG_SH
 
-    # === UA3F 的 Build/Prepare 直接调用裸命令 po2lmo 生成中文语言包，
-    #     而 po2lmo 由 luci-base 的 host build 提供；luci.mk 只给 luci 系包
-    #     自动加 luci-base/host 依赖，第三方包没有，并行编译会撞 po2lmo: not found ===
-    - name: Prebuild po2lmo (for UA3F i18n)
-      run: |
-        cd openwrt
-        make package/feeds/luci/luci-base/host/compile -j$(nproc)
-        test -x staging_dir/host/bin/po2lmo && echo "po2lmo OK" || { echo "::error::po2lmo 未生成"; exit 1; }
-
     - name: Download package
       id: package
       run: |
@@ -146,6 +137,24 @@ jobs:
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
+
+    # === 先落好 host 工具链，否则下面调 package 的 host 构建目标会直接失败 ===
+    # 这两步本来就是 make world 的前置工作，提前做不会增加总时长。
+    - name: Prepare tools & toolchain
+      run: |
+        cd openwrt
+        make tools/install -j$(nproc)
+        make toolchain/install -j$(nproc)
+
+    # === UA3F 的 Build/Prepare 直接调用裸命令 po2lmo 生成中文语言包，
+    #     而 po2lmo 由 luci-base 的 host build 提供；luci.mk 只给 luci 系包
+    #     自动加 luci-base/host 依赖，第三方包没有（已在 diy-part2-custom.sh 里补上）。
+    #     这里显式预构建一次，保证 po2lmo 一定先于 UA3F 存在。 ===
+    - name: Prebuild po2lmo (for UA3F i18n)
+      run: |
+        cd openwrt
+        make package/feeds/luci/luci-base/host/compile -j$(nproc)
+        test -x staging_dir/host/bin/po2lmo && echo "po2lmo OK" || { echo "::error::po2lmo 未生成"; exit 1; }
 
     - name: Compile the firmware
       id: compile
