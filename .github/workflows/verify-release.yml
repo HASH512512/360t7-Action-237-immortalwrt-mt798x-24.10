@@ -29,6 +29,7 @@ jobs:
       - name: Download release manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.inputs.tag }}
         run: |
           set -e
